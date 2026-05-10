@@ -242,7 +242,7 @@ export async function analyzeContent(content: string, keyword: string, preMatchR
           : 'low',
         summary: String(parsed.summary || '').slice(0, 150),
         tags: Array.isArray(parsed.tags)
-          ? parsed.tags.filter((t: any) => typeof t === 'string').slice(0, 5)
+          ? parsed.tags.filter((t: any) => typeof t === 'string').map((t: string) => t.trim().slice(0, 30)).filter(Boolean).slice(0, 5)
           : []
       };
     }
