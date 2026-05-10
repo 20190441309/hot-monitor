@@ -1,16 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Flame, Search, Plus, Bell, Trash2, Pencil,
+  Flame, Search, Plus, Bell, Trash2, Pencil, Bookmark,
   ExternalLink, RefreshCw, X, Check, AlertTriangle,
   Zap, TrendingUp, Twitter, Globe, Eye, Activity, Clock, Target,
   ChevronLeft, ChevronRight,
   MessageCircle, Repeat2, Quote, User, Shield, ShieldAlert,
   ChevronDown, ChevronUp, ChevronsUpDown, ThermometerSun, FileText,
-  Cog
+  Cog, Rss, Tag
 } from 'lucide-react';
 import { 
-  keywordsApi, hotspotsApi, notificationsApi, triggerHotspotCheck,
+  keywordsApi, hotspotsApi, notificationsApi, triggerHotspotCheck, tagsApi,
   type Keyword, type Hotspot, type Stats, type Notification
 } from './services/api';
 import { onNewHotspot, onNotification, subscribeToKeywords } from './services/socket';
@@ -20,6 +20,9 @@ import { BackgroundBeams } from './components/ui/background-beams';
 import { Meteors } from './components/ui/meteors';
 import FilterSortBar, { defaultFilterState, type FilterState } from './components/FilterSortBar';
 import Settings from './components/Settings';
+import Notifications from './components/Notifications';
+import StatsDashboard from './components/Stats';
+import RssFeeds from './components/RssFeeds';
 import { sortHotspots } from './utils/sortHotspots';
 import { relativeTime, formatDateTime } from './utils/relativeTime';
 // TextGenerateEffect available for future use
@@ -59,17 +62,23 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'keywords' | 'search' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'keywords' | 'search' | 'stats' | 'notifications' | 'rss' | 'settings'>('dashboard');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [dashboardFilters, setDashboardFilters] = useState<FilterState>({ ...defaultFilterState });
   const [searchFilters, setSearchFilters] = useState<FilterState>({ ...defaultFilterState });
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [searchResults, setSearchResults] = useState<Hotspot[]>([]);
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savingId, setSavingId] = useState<string | null>(null);
   // 展开/折叠状态
   const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
   const [expandedContents, setExpandedContents] = useState<Set<string>>(new Set());
   const [allReasonsExpanded, setAllReasonsExpanded] = useState(false);
+
+  // 标签编辑状态
+  const [editingTags, setEditingTags] = useState<string | null>(null); // hotspotId
+  const [newTagInput, setNewTagInput] = useState('');
 
   // 编辑关键词状态
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
@@ -135,8 +144,17 @@ function App() {
       loadData();
     });
 
-    const unsubNotif = onNotification(() => {
+    const unsubNotif = onNotification((event) => {
       setUnreadCount(prev => prev + 1);
+      setNotifications(prev => [{
+        id: crypto.randomUUID(),
+        type: event.type,
+        title: event.title,
+        content: event.content,
+        isRead: false,
+        hotspotId: event.hotspotId || null,
+        createdAt: new Date().toISOString(),
+      }, ...prev.slice(0, 19)]);
     });
 
     return () => {
@@ -149,6 +167,42 @@ function App() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // 标签编辑
+  const handleRemoveTag = useCallback(async (hotspotId: string, tagToRemove: string) => {
+    const hotspot = hotspots.find(h => h.id === hotspotId);
+    if (!hotspot) return;
+    const currentTags: string[] = hotspot.tags ? JSON.parse(hotspot.tags) : [];
+    const newTags = currentTags.filter(t => t !== tagToRemove);
+    try {
+      await tagsApi.update(hotspotId, newTags);
+      setHotspots(prev => prev.map(h =>
+        h.id === hotspotId ? { ...h, tags: JSON.stringify(newTags) } : h
+      ));
+    } catch (error) {
+      showToast('删除标签失败', 'error');
+    }
+  }, [hotspots]);
+
+  const handleAddTag = useCallback(async (hotspotId: string, tag: string) => {
+    const trimmed = tag.trim();
+    if (!trimmed) return;
+    const hotspot = hotspots.find(h => h.id === hotspotId);
+    if (!hotspot) return;
+    const currentTags: string[] = hotspot.tags ? JSON.parse(hotspot.tags) : [];
+    if (currentTags.includes(trimmed)) return;
+    const newTags = [...currentTags, trimmed];
+    try {
+      await tagsApi.update(hotspotId, newTags);
+      setHotspots(prev => prev.map(h =>
+        h.id === hotspotId ? { ...h, tags: JSON.stringify(newTags) } : h
+      ));
+      setNewTagInput('');
+      setEditingTags(null);
+    } catch (error) {
+      showToast('添加标签失败', 'error');
+    }
+  }, [hotspots]);
 
   // 添加关键词
   const handleAddKeyword = async (e: React.FormEvent) => {
@@ -236,6 +290,21 @@ function App() {
     }
   };
 
+  // 保存搜索结果为热点
+  const handleSaveResult = async (hotspot: Hotspot) => {
+    const key = hotspot.url + '|' + hotspot.source;
+    setSavingId(key);
+    try {
+      const res = await hotspotsApi.save(hotspot);
+      setSavedIds(prev => new Set(prev).add(key));
+      showToast(res.message, 'success');
+    } catch (error) {
+      showToast('保存失败', 'error');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   // 手动触发检查
   const handleManualCheck = async () => {
     setIsChecking(true);
@@ -256,6 +325,16 @@ function App() {
       await notificationsApi.markAllAsRead();
       setUnreadCount(0);
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    } catch (error) {
+      console.error('Failed to mark as read:', error);
+    }
+  };
+
+  const handleMarkAsRead = async (id: string) => {
+    try {
+      await notificationsApi.markAsRead(id);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+      setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (error) {
       console.error('Failed to mark as read:', error);
     }
@@ -288,6 +367,36 @@ function App() {
     }
     setAllReasonsExpanded(!allReasonsExpanded);
   };
+
+  // 按日期分组热点（时间线视图）
+  const groupedHotspots = useMemo(() => {
+    const groups: { date: string; label: string; items: Hotspot[] }[] = [];
+    const map = new Map<string, Hotspot[]>();
+
+    for (const h of hotspots) {
+      const d = new Date(h.createdAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(h);
+    }
+
+    for (const [key, items] of map) {
+      const d = new Date(key);
+      const today = new Date();
+      const isToday = key === `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isYesterday = key === `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
+      let label = `${d.getMonth() + 1}月${d.getDate()}日`;
+      if (isToday) label = '今天';
+      else if (isYesterday) label = '昨天';
+
+      groups.push({ date: key, label, items });
+    }
+
+    return groups;
+  }, [hotspots]);
 
   // Client-side filtering/sorting for search results
   const filteredSearchResults = useMemo(() => {
@@ -452,11 +561,16 @@ function App() {
                     >
                       <div className="flex items-center justify-between p-4 border-b border-white/5">
                         <h3 className="font-medium text-white">通知</h3>
-                        {unreadCount > 0 && (
-                          <button onClick={handleMarkAllRead} className="text-xs text-blue-400 hover:text-blue-300">
-                            全部已读
+                        <div className="flex items-center gap-3">
+                          {unreadCount > 0 && (
+                            <button onClick={handleMarkAllRead} className="text-xs text-blue-400 hover:text-blue-300">
+                              全部已读
+                            </button>
+                          )}
+                          <button onClick={() => { setActiveTab('notifications'); setShowNotifications(false); }} className="text-xs text-slate-500 hover:text-slate-300">
+                            查看全部
                           </button>
-                        )}
+                        </div>
                       </div>
                       <div className="max-h-80 overflow-y-auto">
                         {notifications.length === 0 ? (
@@ -464,8 +578,15 @@ function App() {
                         ) : (
                           <div className="divide-y divide-white/5">
                             {notifications.slice(0, 5).map(n => (
-                              <div key={n.id} className={cn("p-4 transition-colors", n.isRead ? 'opacity-50' : 'hover:bg-white/5')}>
-                                <p className="text-sm font-medium text-white">{n.title}</p>
+                              <div
+                                key={n.id}
+                                onClick={() => !n.isRead && handleMarkAsRead(n.id)}
+                                className={cn("p-4 transition-colors cursor-pointer", n.isRead ? 'opacity-50' : 'hover:bg-white/5')}
+                              >
+                                <p className="text-sm font-medium text-white">
+                                  {!n.isRead && <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 mr-2" />}
+                                  {n.title}
+                                </p>
                                 <p className="text-xs text-slate-500 mt-1 line-clamp-2">{n.content}</p>
                               </div>
                             ))}
@@ -489,6 +610,9 @@ function App() {
             { key: 'dashboard', label: '热点雷达', icon: Activity },
             { key: 'keywords', label: '监控词', icon: Target },
             { key: 'search', label: '搜索', icon: Search },
+            { key: 'stats', label: '统计', icon: TrendingUp },
+            { key: 'notifications', label: '通知', icon: Bell },
+            { key: 'rss', label: '订阅', icon: Rss },
             { key: 'settings', label: '设置', icon: Cog },
           ] as const).map(({ key, label, icon: Icon }) => (
             <button
@@ -610,10 +734,10 @@ function App() {
                   <p className="text-sm text-slate-600 mt-1">添加监控关键词开始追踪</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div>
                   {/* 一键展开/折叠所有理由 */}
                   {hotspots.some(h => h.relevanceReason) && (
-                    <div className="flex justify-end">
+                    <div className="flex justify-end mb-4">
                       <button
                         onClick={() => toggleAllReasons(hotspots)}
                         className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-blue-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
@@ -624,17 +748,32 @@ function App() {
                     </div>
                   )}
 
-                  {hotspots.map((hotspot, index) => {
-                    const heatScore = calcHeatScore(hotspot);
-                    const heat = getHeatLevel(heatScore);
-                    return (
-                    <motion.div
-                      key={hotspot.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.03 }}
-                      className="group p-5 rounded-2xl bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 hover:border-white/10 transition-all"
-                    >
+                  {/* 时间线视图 */}
+                  {groupedHotspots.map((group) => (
+                    <div key={group.date} className="mb-6 last:mb-0">
+                      {/* 日期标题 */}
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          <h3 className="text-sm font-semibold text-slate-300">{group.label}</h3>
+                        </div>
+                        <div className="flex-1 h-px bg-white/5" />
+                        <span className="text-[11px] text-slate-600">{group.items.length} 条</span>
+                      </div>
+
+                      {/* 该日期下的热点列表 */}
+                      <div className="space-y-3 ml-1 border-l border-white/5 pl-5">
+                        {group.items.map((hotspot, index) => {
+                          const heatScore = calcHeatScore(hotspot);
+                          const heat = getHeatLevel(heatScore);
+                          return (
+                          <motion.div
+                            key={hotspot.id}
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: index * 0.03 }}
+                            className="relative group p-5 rounded-2xl bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 hover:border-white/10 transition-all"
+                          >
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           {/* Row 1: Meta badges */}
@@ -702,6 +841,53 @@ function App() {
                               <span className="text-sm text-slate-500">{hotspot.summary}</span>
                             </div>
                           )}
+
+                          {/* 标签 */}
+                          {(() => {
+                            const tags: string[] = hotspot.tags ? JSON.parse(hotspot.tags) : [];
+                            if (tags.length === 0 && editingTags !== hotspot.id) return null;
+                            return (
+                              <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                                {tags.map((tag, i) => (
+                                  <span
+                                    key={i}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[10px] font-medium group/tag"
+                                  >
+                                    <Tag className="w-2.5 h-2.5" />
+                                    {tag}
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleRemoveTag(hotspot.id, tag); }}
+                                      className="opacity-0 group-hover/tag:opacity-100 hover:text-red-400 transition-all ml-0.5"
+                                    >
+                                      <X className="w-2.5 h-2.5" />
+                                    </button>
+                                  </span>
+                                ))}
+                                {editingTags === hotspot.id ? (
+                                  <form
+                                    onSubmit={(e) => { e.preventDefault(); handleAddTag(hotspot.id, newTagInput); }}
+                                    className="inline-flex"
+                                  >
+                                    <input
+                                      autoFocus
+                                      value={newTagInput}
+                                      onChange={(e) => setNewTagInput(e.target.value)}
+                                      onBlur={() => { setEditingTags(null); setNewTagInput(''); }}
+                                      placeholder="输入标签"
+                                      className="w-20 px-2 py-0.5 text-[10px] bg-white/5 border border-purple-500/30 rounded-md text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/50"
+                                    />
+                                  </form>
+                                ) : (
+                                  <button
+                                    onClick={() => setEditingTags(hotspot.id)}
+                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] text-slate-600 hover:text-purple-400 hover:bg-purple-500/10 transition-all"
+                                  >
+                                    <Plus className="w-2.5 h-2.5" />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           {/* 作者信息 */}
                           {hotspot.authorName && (
@@ -857,8 +1043,9 @@ function App() {
                     </motion.div>
                     );
                   })}
-                </div>
-              )}
+                      </div>
+                    </div>
+                  ))}
 
               {/* Pagination */}
               {totalPages > 1 && !isLoading && (
@@ -908,6 +1095,8 @@ function App() {
                   <span className="text-xs text-slate-600 ml-2">
                     共 {stats?.total || 0} 条
                   </span>
+                </div>
+              )}
                 </div>
               )}
             </div>
@@ -1188,6 +1377,52 @@ function App() {
                           <span className="text-sm text-slate-500">{hotspot.summary}</span>
                         </div>
                       )}
+                      {/* 标签 */}
+                      {(() => {
+                        const tags: string[] = hotspot.tags ? JSON.parse(hotspot.tags) : [];
+                        if (tags.length === 0 && editingTags !== hotspot.id) return null;
+                        return (
+                          <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                            {tags.map((tag, i) => (
+                              <span
+                                key={i}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[10px] font-medium group/tag"
+                              >
+                                <Tag className="w-2.5 h-2.5" />
+                                {tag}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleRemoveTag(hotspot.id, tag); }}
+                                  className="opacity-0 group-hover/tag:opacity-100 hover:text-red-400 transition-all ml-0.5"
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </span>
+                            ))}
+                            {editingTags === hotspot.id ? (
+                              <form
+                                onSubmit={(e) => { e.preventDefault(); handleAddTag(hotspot.id, newTagInput); }}
+                                className="inline-flex"
+                              >
+                                <input
+                                  autoFocus
+                                  value={newTagInput}
+                                  onChange={(e) => setNewTagInput(e.target.value)}
+                                  onBlur={() => { setEditingTags(null); setNewTagInput(''); }}
+                                  placeholder="输入标签"
+                                  className="w-20 px-2 py-0.5 text-[10px] bg-white/5 border border-purple-500/30 rounded-md text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/50"
+                                />
+                              </form>
+                            ) : (
+                              <button
+                                onClick={() => setEditingTags(hotspot.id)}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] text-slate-600 hover:text-purple-400 hover:bg-purple-500/10 transition-all"
+                              >
+                                <Plus className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {hotspot.authorName && (
                         <div className="flex items-center gap-2 mb-2">
                           <User className="w-4 h-4 text-slate-600" />
@@ -1222,20 +1457,65 @@ function App() {
                         </div>
                       )}
                     </div>
-                    <a
-                      href={hotspot.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 px-4 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-sm font-medium transition-all"
-                    >
-                      查看
-                    </a>
+                    <div className="shrink-0 flex flex-col gap-2">
+                      {(() => {
+                        const saveKey = hotspot.url + '|' + hotspot.source;
+                        const isSaved = savedIds.has(saveKey);
+                        const isSaving = savingId === saveKey;
+                        return (
+                          <button
+                            onClick={() => !isSaved && handleSaveResult(hotspot)}
+                            disabled={isSaved || isSaving}
+                            className={cn(
+                              "px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all",
+                              isSaved
+                                ? "bg-emerald-500/10 text-emerald-400 cursor-default"
+                                : isSaving
+                                ? "bg-white/5 text-slate-500 cursor-wait"
+                                : "bg-white/5 hover:bg-emerald-500/10 text-slate-400 hover:text-emerald-400"
+                            )}
+                          >
+                            {isSaved ? (
+                              <><Check className="w-3.5 h-3.5" /> 已保存</>
+                            ) : isSaving ? (
+                              <><div className="w-3.5 h-3.5 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin" /> 保存中</>
+                            ) : (
+                              <><Bookmark className="w-3.5 h-3.5" /> 保存</>
+                            )}
+                          </button>
+                        );
+                      })()}
+                      <a
+                        href={hotspot.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-sm font-medium transition-all text-center"
+                      >
+                        查看
+                      </a>
+                    </div>
                   </div>
                 </motion.div>
                 );
               })}
             </div>
           </div>
+        )}
+
+        {/* RSS Tab */}
+        {activeTab === 'rss' && <RssFeeds />}
+
+        {/* Stats Tab */}
+        {activeTab === 'stats' && stats && (
+          <StatsDashboard stats={stats} keywords={keywords} />
+        )}
+
+        {/* Notifications Tab */}
+        {activeTab === 'notifications' && (
+          <Notifications
+            unreadCount={unreadCount}
+            onUnreadCountChange={setUnreadCount}
+          />
         )}
 
         {/* Settings Tab */}
