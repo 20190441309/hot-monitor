@@ -15,6 +15,11 @@ interface Hotspot {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let transporter: any = null;
 
+/** 重置邮件发送器（设置变更后调用） */
+export function resetEmailTransporter() {
+  transporter = null;
+}
+
 function getTransporter(): any {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
     console.warn('Email configuration incomplete, notifications disabled');

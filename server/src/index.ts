@@ -11,8 +11,10 @@ import hotspotsRouter from './routes/hotspots.js';
 import settingsRouter from './routes/settings.js';
 import notificationsRouter from './routes/notifications.js';
 import { runHotspotCheck } from './jobs/hotspotChecker.js';
+import { syncEnvFromDB } from './utils/settings.js';
 
 dotenv.config();
+await syncEnvFromDB();
 
 const app = express();
 const httpServer = createServer(app);

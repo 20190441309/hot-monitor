@@ -1,10 +1,24 @@
-import OpenAI from 'openai/index.mjs';
+import { OpenAI } from 'openai';
 import type { AIAnalysis } from '../types.js';
 
-const deepseek = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY ?? '',
-  baseURL: 'https://api.deepseek.com'
-});
+let deepseek: OpenAI | null = null;
+
+function getDeepseekClient(): OpenAI | null {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) return null;
+  if (!deepseek) {
+    deepseek = new OpenAI({
+      apiKey,
+      baseURL: 'https://api.deepseek.com'
+    });
+  }
+  return deepseek;
+}
+
+/** 重置客户端（设置变更后调用） */
+export function resetDeepseekClient() {
+  deepseek = null;
+}
 
 // ========== Query Expansion（查询扩展） ==========
 
@@ -24,14 +38,21 @@ export async function expandKeyword(keyword: string): Promise<string[]> {
   // 不管 AI 是否可用，先提取基础核心词
   const coreTerms = extractCoreTerms(keyword);
 
-  if (!process.env.DEEPSEEK_API_KEY) {
+  const client = getDeepseekClient();
+  if (!client) {
     const result = [keyword, ...coreTerms];
     expansionCache.set(keyword, result);
     return result;
   }
 
   try {
-    const result = await deepseek.chat.completions.create({
+    const client = getDeepseekClient();
+    if (!client) {
+      const result = [keyword, ...extractCoreTerms(keyword)];
+      expansionCache.set(keyword, result);
+      return result;
+    }
+    const result = await client.chat.completions.create({
       model: 'deepseek-v4-flash',
       messages: [
         {
@@ -165,10 +186,22 @@ export async function analyzeContent(content: string, keyword: string, preMatchR
     };
   }
 
+  const client = getDeepseekClient();
+  if (!client) {
+    return {
+      isReal: true,
+      relevance: matchResult.matched ? 30 : 10,
+      relevanceReason: 'AI 未配置，使用默认分数',
+      keywordMentioned: matchResult.matched,
+      importance: 'low',
+      summary: content.slice(0, 50) + '...'
+    };
+  }
+
   try {
     const prompt = buildAnalysisPrompt(keyword, matchResult);
 
-    const result = await deepseek.chat.completions.create({
+    const result = await client.chat.completions.create({
       model: 'deepseek-v4-flash',
       messages: [
         {
