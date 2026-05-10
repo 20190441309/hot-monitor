@@ -217,6 +217,115 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// 获取所有标签（聚合）
+router.get('/tags', async (req, res) => {
+  try {
+    const hotspots = await prisma.hotspot.findMany({
+      where: { tags: { not: null } },
+      select: { tags: true }
+    });
+
+    const tagCounts = new Map<string, number>();
+    for (const hotspot of hotspots) {
+      if (!hotspot.tags) continue;
+      try {
+        const parsed = JSON.parse(hotspot.tags);
+        if (Array.isArray(parsed)) {
+          for (const tag of parsed) {
+            if (typeof tag === 'string' && tag.trim()) {
+              tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const tags = [...tagCounts.entries()]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json(tags);
+  } catch (error) {
+    console.error('Error fetching tags:', error);
+    res.status(500).json({ error: 'Failed to fetch tags' });
+  }
+});
+
+// 更新单个热点的标签
+router.put('/:id/tags', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { tags } = req.body;
+
+    if (!Array.isArray(tags)) {
+      return res.status(400).json({ error: 'tags must be an array of strings' });
+    }
+
+    const sanitized = tags
+      .filter((t: any) => typeof t === 'string')
+      .map((t: string) => t.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+
+    const hotspot = await prisma.hotspot.update({
+      where: { id },
+      data: { tags: JSON.stringify(sanitized) }
+    });
+
+    res.json(hotspot);
+  } catch (error) {
+    console.error('Error updating tags:', error);
+    res.status(500).json({ error: 'Failed to update tags' });
+  }
+});
+
+// 批量为未标记热点生成标签
+router.post('/batch-tag', async (req, res) => {
+  try {
+    const untagged = await prisma.hotspot.findMany({
+      where: {
+        OR: [
+          { tags: null },
+          { tags: '[]' },
+          { tags: '' }
+        ]
+      },
+      include: {
+        keyword: { select: { text: true } }
+      },
+      take: 100
+    });
+
+    if (untagged.length === 0) {
+      return res.json({ processed: 0, total: 0, message: '没有需要生成标签的热点' });
+    }
+
+    const { analyzeContent } = await import('../services/ai.js');
+    let processed = 0;
+
+    for (const hotspot of untagged) {
+      try {
+        const keyword = hotspot.keyword?.text || '';
+        const fullText = hotspot.title + '\n' + hotspot.content;
+        const analysis = await analyzeContent(fullText, keyword);
+
+        await prisma.hotspot.update({
+          where: { id: hotspot.id },
+          data: { tags: JSON.stringify(analysis.tags || []) }
+        });
+        processed++;
+      } catch (error) {
+        console.error(`Failed to tag hotspot ${hotspot.id}:`, error);
+      }
+    }
+
+    res.json({ processed, total: untagged.length, message: `已为 ${processed} 条热点生成标签` });
+  } catch (error) {
+    console.error('Error in batch-tag:', error);
+    res.status(500).json({ error: 'Failed to batch generate tags' });
+  }
+});
+
 // 获取单个热点
 router.get('/:id', async (req, res) => {
   try {
