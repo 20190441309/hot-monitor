@@ -128,11 +128,17 @@ router.get('/stats', async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+
     const [
       totalHotspots,
       todayHotspots,
       urgentHotspots,
-      sourceStats
+      sourceStats,
+      importanceStats,
+      dailyTrends,
+      topKeywords
     ] = await Promise.all([
       prisma.hotspot.count(),
       prisma.hotspot.count({
@@ -144,8 +150,51 @@ router.get('/stats', async (req, res) => {
       prisma.hotspot.groupBy({
         by: ['source'],
         _count: { source: true }
+      }),
+      prisma.hotspot.groupBy({
+        by: ['importance'],
+        _count: { importance: true }
+      }),
+      // SQLite: 按日分组统计最近 7 天
+      prisma.$queryRaw<{ date: string; count: number }[]>`
+        SELECT strftime('%Y-%m-%d', createdAt) as date, COUNT(*) as count
+        FROM Hotspot
+        WHERE createdAt >= ${sevenDaysAgo.toISOString()}
+        GROUP BY strftime('%Y-%m-%d', createdAt)
+        ORDER BY date ASC
+      `,
+      // 按关键词分组，取 top 10
+      prisma.hotspot.groupBy({
+        by: ['keywordId'],
+        _count: { keywordId: true },
+        orderBy: { _count: { keywordId: 'desc' } },
+        take: 10,
+        where: { keywordId: { not: null } }
       })
     ]);
+
+    // 补全 7 天中没有数据的日期
+    const trendMap = new Map(dailyTrends.map(d => [d.date, Number(d.count)]));
+    const trends: { date: string; count: number }[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(sevenDaysAgo);
+      d.setDate(d.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      trends.push({ date: key, count: trendMap.get(key) ?? 0 });
+    }
+
+    // 查询 top keywords 的关键词文本
+    const keywordIds = topKeywords.map(k => k.keywordId).filter(Boolean) as string[];
+    const keywords = keywordIds.length > 0
+      ? await prisma.keyword.findMany({ where: { id: { in: keywordIds } }, select: { id: true, text: true } })
+      : [];
+    const keywordMap = new Map(keywords.map(k => [k.id, k.text]));
+
+    const topKeywordsData = topKeywords.map(k => ({
+      keywordId: k.keywordId,
+      keyword: keywordMap.get(k.keywordId!) || '未知',
+      count: k._count.keywordId
+    }));
 
     res.json({
       total: totalHotspots,
@@ -154,7 +203,13 @@ router.get('/stats', async (req, res) => {
       bySource: sourceStats.reduce((acc: Record<string, number>, item: { source: string; _count: { source: number } }) => {
         acc[item.source] = item._count.source;
         return acc;
-      }, {} as Record<string, number>)
+      }, {} as Record<string, number>),
+      byImportance: importanceStats.reduce((acc: Record<string, number>, item: { importance: string; _count: { importance: number } }) => {
+        acc[item.importance] = item._count.importance;
+        return acc;
+      }, {} as Record<string, number>),
+      trends,
+      topKeywords: topKeywordsData
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
@@ -235,6 +290,61 @@ router.post('/search', async (req, res) => {
   } catch (error) {
     console.error('Error searching hotspots:', error);
     res.status(500).json({ error: 'Failed to search hotspots' });
+  }
+});
+
+// 保存搜索结果为热点
+router.post('/save', async (req, res) => {
+  try {
+    const { title, content, url, source, sourceId, publishedAt, viewCount, likeCount,
+      retweetCount, replyCount, quoteCount, commentCount, danmakuCount, author, analysis } = req.body;
+
+    if (!title || !url || !source) {
+      return res.status(400).json({ error: 'title, url, source are required' });
+    }
+
+    // 检查是否已存在（唯一约束 url + source）
+    const existing = await prisma.hotspot.findUnique({
+      where: { url_source: { url, source } }
+    });
+
+    if (existing) {
+      return res.json({ hotspot: existing, saved: false, message: '该热点已存在' });
+    }
+
+    const hotspot = await prisma.hotspot.create({
+      data: {
+        title: title.slice(0, 500),
+        content: content?.slice(0, 5000) || '',
+        url,
+        source,
+        sourceId: sourceId || null,
+        isReal: analysis?.isReal ?? true,
+        relevance: analysis?.relevance ?? 0,
+        relevanceReason: analysis?.relevanceReason || null,
+        keywordMentioned: analysis?.keywordMentioned ?? false,
+        importance: analysis?.importance || 'low',
+        summary: analysis?.summary || null,
+        tags: analysis?.tags ? JSON.stringify(analysis.tags) : null,
+        viewCount: viewCount || null,
+        likeCount: likeCount || null,
+        retweetCount: retweetCount || null,
+        replyCount: replyCount || null,
+        commentCount: commentCount || null,
+        danmakuCount: danmakuCount || null,
+        authorName: author?.name || null,
+        authorUsername: author?.username || null,
+        authorAvatar: author?.avatar || null,
+        authorFollowers: author?.followers || null,
+        authorVerified: author?.verified || null,
+        publishedAt: publishedAt ? new Date(publishedAt) : null,
+      }
+    });
+
+    res.status(201).json({ hotspot, saved: true, message: '热点已保存' });
+  } catch (error) {
+    console.error('Error saving hotspot:', error);
+    res.status(500).json({ error: 'Failed to save hotspot' });
   }
 });
 

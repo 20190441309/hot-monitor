@@ -197,6 +197,7 @@ export async function runHotspotCheck(io: Server): Promise<void> {
               authorFollowers: item.author?.followers || null,
               authorVerified: item.author?.verified ?? null,
               publishedAt: item.publishedAt || null,
+              tags: JSON.stringify(analysis.tags || []),
               keywordId: keyword.id
             },
             include: {
