@@ -23,6 +23,7 @@ export interface Hotspot {
   keywordMentioned: boolean | null;
   importance: 'low' | 'medium' | 'high' | 'urgent';
   summary: string | null;
+  tags: string | null;
   viewCount: number | null;
   likeCount: number | null;
   retweetCount: number | null;
@@ -55,6 +56,18 @@ export interface Stats {
   today: number;
   urgent: number;
   bySource: Record<string, number>;
+  byImportance: Record<string, number>;
+  trends: { date: string; count: number }[];
+  topKeywords: { keywordId: string; keyword: string; count: number }[];
+}
+
+export interface RssFeed {
+  id: string;
+  name: string;
+  url: string;
+  isActive: boolean;
+  lastChecked: string | null;
+  createdAt: string;
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -133,13 +146,19 @@ export const hotspotsApi = {
   
   getById: (id: string) => request<Hotspot>(`/hotspots/${id}`),
   
-  search: (query: string, sources?: string[]) => 
+  search: (query: string, sources?: string[]) =>
     request<{ results: Hotspot[] }>('/hotspots/search', {
       method: 'POST',
       body: JSON.stringify({ query, sources })
     }),
-  
-  delete: (id: string) => 
+
+  save: (data: Partial<Hotspot> & { analysis?: any }) =>
+    request<{ hotspot: Hotspot; saved: boolean; message: string }>('/hotspots/save', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
+
+  delete: (id: string) =>
     request<void>(`/hotspots/${id}`, { method: 'DELETE' })
 };
 
@@ -182,5 +201,47 @@ export const settingsApi = {
 };
 
 // Manual trigger
-export const triggerHotspotCheck = () => 
+export const triggerHotspotCheck = () =>
   request<{ message: string }>('/check-hotspots', { method: 'POST' });
+
+// RSS API
+export const rssApi = {
+  getAll: () => request<RssFeed[]>('/rss'),
+
+  create: (data: { name: string; url: string }) =>
+    request<{ feed: RssFeed; itemCount: number }>('/rss', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
+
+  update: (id: string, data: Partial<RssFeed>) =>
+    request<RssFeed>(`/rss/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    }),
+
+  delete: (id: string) =>
+    request<void>(`/rss/${id}`, { method: 'DELETE' }),
+
+  toggle: (id: string) =>
+    request<RssFeed>(`/rss/${id}/toggle`, { method: 'PATCH' }),
+
+  check: () =>
+    request<{ message: string }>('/rss/check', { method: 'POST' })
+};
+
+// Tags API
+export const tagsApi = {
+  getAll: () => request<{ tag: string; count: number }[]>('/hotspots/tags'),
+
+  update: (hotspotId: string, tags: string[]) =>
+    request<Hotspot>(`/hotspots/${hotspotId}/tags`, {
+      method: 'PUT',
+      body: JSON.stringify({ tags })
+    }),
+
+  batchGenerate: () =>
+    request<{ processed: number; total: number; message: string }>('/hotspots/batch-tag', {
+      method: 'POST'
+    })
+};
