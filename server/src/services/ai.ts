@@ -164,8 +164,14 @@ ${matchHint}
   "relevanceReason": "相关性打分理由...",
   "keywordMentioned": true/false,
   "importance": "low/medium/high/urgent",
-  "summary": "此内容与【${keyword}】的关联：..."
+  "summary": "此内容与【${keyword}】的关联：...",
+  "tags": ["标签1", "标签2"]
 }
+
+tags 规则：
+- 2-5 个语义化标签，描述内容的主题/领域/事件类型
+- 中文为主，简短（2-6 字），可以包含英文专有名词
+- 示例：["AI Agent", "Anthropic", "教程/实践"], ["开源/仓库", "编码"], ["安全漏洞", "零日攻击"]
 
 只输出 JSON，不要有其他内容。`;
 }
@@ -182,7 +188,8 @@ export async function analyzeContent(content: string, keyword: string, preMatchR
       relevanceReason: '未配置 AI 服务，使用默认分数',
       keywordMentioned: matchResult.matched,
       importance: 'low',
-      summary: content.slice(0, 50) + '...'
+      summary: content.slice(0, 50) + '...',
+      tags: []
     };
   }
 
@@ -194,7 +201,8 @@ export async function analyzeContent(content: string, keyword: string, preMatchR
       relevanceReason: 'AI 未配置，使用默认分数',
       keywordMentioned: matchResult.matched,
       importance: 'low',
-      summary: content.slice(0, 50) + '...'
+      summary: content.slice(0, 50) + '...',
+      tags: []
     };
   }
 
@@ -229,10 +237,13 @@ export async function analyzeContent(content: string, keyword: string, preMatchR
         relevance: Math.min(100, Math.max(0, Number(parsed.relevance) || 0)),
         relevanceReason: String(parsed.relevanceReason || '').slice(0, 200),
         keywordMentioned: Boolean(parsed.keywordMentioned),
-        importance: ['low', 'medium', 'high', 'urgent'].includes(parsed.importance) 
-          ? parsed.importance 
+        importance: ['low', 'medium', 'high', 'urgent'].includes(parsed.importance)
+          ? parsed.importance
           : 'low',
-        summary: String(parsed.summary || '').slice(0, 150)
+        summary: String(parsed.summary || '').slice(0, 150),
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.filter((t: any) => typeof t === 'string').slice(0, 5)
+          : []
       };
     }
 
@@ -246,7 +257,8 @@ export async function analyzeContent(content: string, keyword: string, preMatchR
       relevanceReason: 'AI 分析失败，使用默认分数',
       keywordMentioned: matchResult.matched,
       importance: 'low',
-      summary: content.slice(0, 50) + '...'
+      summary: content.slice(0, 50) + '...',
+      tags: []
     };
   }
 }
