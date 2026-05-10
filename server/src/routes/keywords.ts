@@ -87,6 +87,9 @@ router.put('/:id', async (req, res) => {
 
     res.json(keyword);
   } catch (error: any) {
+    if (error.code === 'P2002') {
+      return res.status(409).json({ error: 'Keyword already exists' });
+    }
     if (error.code === 'P2025') {
       return res.status(404).json({ error: 'Keyword not found' });
     }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Flame, Search, Plus, Bell, Trash2, 
+  Flame, Search, Plus, Bell, Trash2, Pencil,
   ExternalLink, RefreshCw, X, Check, AlertTriangle,
   Zap, TrendingUp, Twitter, Globe, Eye, Activity, Clock, Target,
   ChevronLeft, ChevronRight,
@@ -70,6 +70,11 @@ function App() {
   const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
   const [expandedContents, setExpandedContents] = useState<Set<string>>(new Set());
   const [allReasonsExpanded, setAllReasonsExpanded] = useState(false);
+
+  // 编辑关键词状态
+  const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
+  const [editText, setEditText] = useState('');
+  const [editCategory, setEditCategory] = useState('');
 
   // 加载数据
   const loadData = useCallback(async () => {
@@ -179,6 +184,38 @@ function App() {
       setKeywords(prev => prev.map(k => k.id === id ? updated : k));
     } catch (error) {
       showToast('操作失败', 'error');
+    }
+  };
+
+  // 打开编辑弹窗
+  const openEditDialog = (keyword: Keyword) => {
+    setEditingKeyword(keyword);
+    setEditText(keyword.text);
+    setEditCategory(keyword.category || '');
+  };
+
+  // 关闭编辑弹窗
+  const closeEditDialog = () => {
+    setEditingKeyword(null);
+    setEditText('');
+    setEditCategory('');
+  };
+
+  // 更新关键词
+  const handleUpdateKeyword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingKeyword || !editText.trim()) return;
+
+    try {
+      const updated = await keywordsApi.update(editingKeyword.id, {
+        text: editText.trim(),
+        category: editCategory.trim() || null,
+      });
+      setKeywords(prev => prev.map(k => k.id === editingKeyword.id ? { ...k, ...updated } : k));
+      showToast('关键词更新成功', 'success');
+      closeEditDialog();
+    } catch (error: any) {
+      showToast(error.message || '更新失败', 'error');
     }
   };
 
@@ -950,12 +987,20 @@ function App() {
                         </div>
                       </div>
                       
-                      <button
-                        onClick={() => handleDeleteKeyword(keyword.id)}
-                        className="p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openEditDialog(keyword)}
+                          className="p-2 rounded-lg text-slate-600 hover:text-blue-400 hover:bg-blue-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteKeyword(keyword.id)}
+                          className="p-2 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   </motion.div>
                 ))}
@@ -971,6 +1016,81 @@ function App() {
                 <p className="text-sm text-slate-600 mt-1">添加你想追踪的技术热点词</p>
               </div>
             )}
+
+            {/* Edit Keyword Dialog */}
+            <AnimatePresence>
+              {editingKeyword && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 z-50 flex items-center justify-center p-4"
+                >
+                  {/* Backdrop */}
+                  <div
+                    className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                    onClick={closeEditDialog}
+                  />
+                  {/* Dialog */}
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                    className="relative w-full max-w-md bg-[#0a0a1a]/95 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between p-5 border-b border-white/5">
+                      <h3 className="text-base font-semibold text-white">编辑关键词</h3>
+                      <button
+                        onClick={closeEditDialog}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-white/10 transition-all"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <form onSubmit={handleUpdateKeyword} className="p-5 space-y-4">
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">关键词文本</label>
+                        <input
+                          type="text"
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          placeholder="输入关键词"
+                          autoFocus
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">分类（可选）</label>
+                        <input
+                          type="text"
+                          value={editCategory}
+                          onChange={(e) => setEditCategory(e.target.value)}
+                          className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          placeholder="如：技术、产品、行业..."
+                        />
+                      </div>
+                      <div className="flex justify-end gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={closeEditDialog}
+                          className="px-5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-white/10 border border-white/10 transition-all"
+                        >
+                          取消
+                        </button>
+                        <motion.button
+                          type="submit"
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="px-6 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-lg shadow-blue-500/25"
+                        >
+                          保存
+                        </motion.button>
+                      </div>
+                    </form>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
