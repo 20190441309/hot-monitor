@@ -80,6 +80,11 @@ function App() {
   const [editingTags, setEditingTags] = useState<string | null>(null); // hotspotId
   const [newTagInput, setNewTagInput] = useState('');
 
+  // 标签云筛选状态
+  const [allTags, setAllTags] = useState<{ tag: string; count: number }[]>([]);
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [isBatchTagging, setIsBatchTagging] = useState(false);
+
   // 编辑关键词状态
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
   const [editText, setEditText] = useState('');
@@ -102,11 +107,12 @@ function App() {
       if (dashboardFilters.sortBy) filterParams.sortBy = dashboardFilters.sortBy;
       if (dashboardFilters.sortOrder) filterParams.sortOrder = dashboardFilters.sortOrder;
 
-      const [keywordsData, hotspotsData, statsData, notifData] = await Promise.all([
+      const [keywordsData, hotspotsData, statsData, notifData, tagsData] = await Promise.all([
         keywordsApi.getAll(),
         hotspotsApi.getAll(filterParams as any),
         hotspotsApi.getStats(),
-        notificationsApi.getAll({ limit: 20 })
+        notificationsApi.getAll({ limit: 20 }),
+        tagsApi.getAll().catch(() => [])
       ]);
       setKeywords(keywordsData);
       setHotspots(hotspotsData.data);
@@ -114,6 +120,7 @@ function App() {
       setStats(statsData);
       setNotifications(notifData.data);
       setUnreadCount(notifData.unreadCount);
+      setAllTags(tagsData);
 
       // 订阅关键词
       const activeKeywords = keywordsData.filter(k => k.isActive).map(k => k.text);
@@ -368,12 +375,26 @@ function App() {
     setAllReasonsExpanded(!allReasonsExpanded);
   };
 
+  // 客户端标签筛选
+  const filteredHotspots = useMemo(() => {
+    if (selectedTags.size === 0) return hotspots;
+    return hotspots.filter(h => {
+      if (!h.tags) return false;
+      try {
+        const tags: string[] = JSON.parse(h.tags);
+        return [...selectedTags].some(t => tags.includes(t));
+      } catch {
+        return false;
+      }
+    });
+  }, [hotspots, selectedTags]);
+
   // 按日期分组热点（时间线视图）
   const groupedHotspots = useMemo(() => {
     const groups: { date: string; label: string; items: Hotspot[] }[] = [];
     const map = new Map<string, Hotspot[]>();
 
-    for (const h of hotspots) {
+    for (const h of filteredHotspots) {
       const d = new Date(h.createdAt);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       if (!map.has(key)) map.set(key, []);
@@ -396,7 +417,7 @@ function App() {
     }
 
     return groups;
-  }, [hotspots]);
+  }, [filteredHotspots]);
 
   // Client-side filtering/sorting for search results
   const filteredSearchResults = useMemo(() => {
@@ -719,13 +740,84 @@ function App() {
                   onChange={setDashboardFilters}
                   keywords={keywords}
                 />
+                {/* 标签云筛选 */}
+                {allTags.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 mt-3">
+                    <span className="text-[10px] text-slate-600 font-medium">标签:</span>
+                    {allTags.slice(0, 20).map(({ tag, count }) => (
+                      <button
+                        key={tag}
+                        onClick={() => {
+                          setSelectedTags(prev => {
+                            const next = new Set(prev);
+                            if (next.has(tag)) next.delete(tag);
+                            else next.add(tag);
+                            return next;
+                          });
+                        }}
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-all border",
+                          selectedTags.has(tag)
+                            ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                            : "bg-white/[0.03] text-slate-500 border-white/10 hover:border-white/20 hover:text-slate-400"
+                        )}
+                      >
+                        <Tag className="w-2.5 h-2.5" />
+                        {tag}
+                        <span className="text-[9px] opacity-60">{count}</span>
+                      </button>
+                    ))}
+                    {selectedTags.size > 0 && (
+                      <button
+                        onClick={() => setSelectedTags(new Set())}
+                        className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+                      >
+                        清除标签筛选
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        setIsBatchTagging(true);
+                        try {
+                          const result = await tagsApi.batchGenerate();
+                          showToast(result.message, 'success');
+                          const tagsData = await tagsApi.getAll();
+                          setAllTags(tagsData);
+                        } catch (error) {
+                          showToast('批量生成标签失败', 'error');
+                        } finally {
+                          setIsBatchTagging(false);
+                        }
+                      }}
+                      disabled={isBatchTagging}
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-all border ml-auto",
+                        isBatchTagging
+                          ? "bg-white/5 text-slate-600 border-white/5 cursor-not-allowed"
+                          : "bg-purple-500/10 text-purple-400 border-purple-500/20 hover:bg-purple-500/20"
+                      )}
+                    >
+                      {isBatchTagging ? (
+                        <>
+                          <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                          生成中...
+                        </>
+                      ) : (
+                        <>
+                          <Tag className="w-2.5 h-2.5" />
+                          批量生成标签
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
               
               {isLoading ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
                 </div>
-              ) : hotspots.length === 0 ? (
+              ) : filteredHotspots.length === 0 ? (
                 <div className="text-center py-16 rounded-2xl border border-dashed border-white/10">
                   <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
                     <Search className="w-8 h-8 text-slate-600" />
@@ -736,10 +828,10 @@ function App() {
               ) : (
                 <div>
                   {/* 一键展开/折叠所有理由 */}
-                  {hotspots.some(h => h.relevanceReason) && (
+                  {filteredHotspots.some(h => h.relevanceReason) && (
                     <div className="flex justify-end mb-4">
                       <button
-                        onClick={() => toggleAllReasons(hotspots)}
+                        onClick={() => toggleAllReasons(filteredHotspots)}
                         className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-blue-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
                       >
                         <ChevronsUpDown className="w-3.5 h-3.5" />
