@@ -2,6 +2,52 @@ import { Router } from 'express';
 import { prisma } from '../db.js';
 import { sortHotspots } from '../utils/sortHotspots.js';
 
+function computeRelated(hotspots: any[]): Map<string, { relatedCount: number; relatedIds: string[] }> {
+  const result = new Map<string, { relatedCount: number; relatedIds: string[] }>();
+
+  // Group by keywordId
+  const byKeyword = new Map<string, any[]>();
+  for (const h of hotspots) {
+    const kid = h.keywordId || '__none__';
+    if (!byKeyword.has(kid)) byKeyword.set(kid, []);
+    byKeyword.get(kid)!.push(h);
+  }
+
+  // For each keyword group, compute tag overlap
+  for (const group of byKeyword.values()) {
+    // Parse tags for each hotspot in the group
+    const parsed = group.map(h => {
+      let tags: string[] = [];
+      if (h.tags) {
+        try { tags = JSON.parse(h.tags); } catch { tags = []; }
+      }
+      return { id: h.id, tagSet: new Set(tags) };
+    });
+
+    // Compare each pair
+    for (let i = 0; i < parsed.length; i++) {
+      const relatedIds: string[] = [];
+      for (let j = 0; j < parsed.length; j++) {
+        if (i === j) continue;
+        // Count tag overlap
+        let overlap = 0;
+        for (const tag of parsed[i].tagSet) {
+          if (parsed[j].tagSet.has(tag)) overlap++;
+        }
+        if (overlap >= 2) {
+          relatedIds.push(parsed[j].id);
+        }
+      }
+      result.set(parsed[i].id, {
+        relatedCount: relatedIds.length,
+        relatedIds
+      });
+    }
+  }
+
+  return result;
+}
+
 const router = Router();
 
 // 获取所有热点
@@ -107,8 +153,15 @@ router.get('/', async (req, res) => {
       hotspots = rawHotspots;
     }
 
+    // Compute related discussions (tag overlap within same keyword)
+    const relatedMap = computeRelated(rawHotspots);
+    const enriched = hotspots.map(h => {
+      const related = relatedMap.get(h.id) || { relatedCount: 0, relatedIds: [] };
+      return { ...h, ...related };
+    });
+
     res.json({
-      data: hotspots,
+      data: enriched,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -347,6 +400,69 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// 获取热点的关联讨论
+router.get('/:id/related', async (req, res) => {
+  try {
+    const hotspot = await prisma.hotspot.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, keywordId: true, tags: true }
+    });
+
+    if (!hotspot) {
+      return res.status(404).json({ error: 'Hotspot not found' });
+    }
+
+    // Parse this hotspot's tags
+    let myTags: string[] = [];
+    if (hotspot.tags) {
+      try { myTags = JSON.parse(hotspot.tags); } catch { myTags = []; }
+    }
+
+    if (myTags.length === 0 || !hotspot.keywordId) {
+      return res.json([]);
+    }
+
+    const myTagSet = new Set(myTags);
+
+    // Find other hotspots in the same keyword group
+    const candidates = await prisma.hotspot.findMany({
+      where: {
+        keywordId: hotspot.keywordId,
+        id: { not: hotspot.id },
+        tags: { not: null }
+      },
+      select: {
+        id: true,
+        title: true,
+        summary: true,
+        source: true,
+        url: true,
+        authorName: true,
+        publishedAt: true,
+        tags: true
+      }
+    });
+
+    // Filter by tag overlap >= 2
+    const related = candidates.filter(c => {
+      let cTags: string[] = [];
+      if (c.tags) {
+        try { cTags = JSON.parse(c.tags); } catch { cTags = []; }
+      }
+      let overlap = 0;
+      for (const tag of cTags) {
+        if (myTagSet.has(tag)) overlap++;
+      }
+      return overlap >= 2;
+    });
+
+    res.json(related);
+  } catch (error) {
+    console.error('Error fetching related hotspots:', error);
+    res.status(500).json({ error: 'Failed to fetch related hotspots' });
+  }
+});
+
 // 手动搜索热点
 router.post('/search', async (req, res) => {
   try {
@@ -421,6 +537,10 @@ router.post('/save', async (req, res) => {
       return res.json({ hotspot: existing, saved: false, message: '该热点已存在' });
     }
 
+    // 获取 OG 图片
+    const { fetchOgImage } = await import('../services/ogImage.js');
+    const thumbnail = await fetchOgImage(url);
+
     const hotspot = await prisma.hotspot.create({
       data: {
         title: title.slice(0, 500),
@@ -435,6 +555,7 @@ router.post('/save', async (req, res) => {
         importance: analysis?.importance || 'low',
         summary: analysis?.summary || null,
         tags: analysis?.tags ? JSON.stringify(analysis.tags) : null,
+        thumbnail: thumbnail || null,
         viewCount: viewCount || null,
         likeCount: likeCount || null,
         retweetCount: retweetCount || null,
