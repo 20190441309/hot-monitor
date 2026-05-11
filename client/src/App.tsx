@@ -9,9 +9,9 @@ import {
   ChevronDown, ChevronUp, ChevronsUpDown, ThermometerSun, FileText,
   Cog, Rss, Tag
 } from 'lucide-react';
-import { 
+import {
   keywordsApi, hotspotsApi, notificationsApi, triggerHotspotCheck, tagsApi,
-  type Keyword, type Hotspot, type Stats, type Notification
+  type Keyword, type Hotspot, type Stats, type Notification, type RelatedHotspot
 } from './services/api';
 import { onNewHotspot, onNotification, subscribeToKeywords } from './services/socket';
 import { cn } from './lib/utils';
@@ -23,6 +23,7 @@ import Settings from './components/Settings';
 import Notifications from './components/Notifications';
 import StatsDashboard from './components/Stats';
 import RssFeeds from './components/RssFeeds';
+import BrandPages from './components/BrandPages';
 import { sortHotspots } from './utils/sortHotspots';
 import { relativeTime, formatDateTime } from './utils/relativeTime';
 // TextGenerateEffect available for future use
@@ -50,6 +51,21 @@ function getHeatLevel(score: number): { label: string; color: string } {
   return { label: '冷', color: 'text-slate-500' };
 }
 
+/** 计算精选综合分 = 热度 × 0.5 + AI相关性 × 0.5 */
+function calcFeaturedScore(h: Hotspot): number {
+  const heat = calcHeatScore(h);
+  const relevance = h.relevance ?? 0;
+  return Math.round(heat * 0.5 + relevance * 0.5);
+}
+
+function getFeaturedLevel(score: number): { bg: string; shadow: string; text: string } {
+  if (score >= 80) return { bg: 'from-amber-500 to-orange-500', shadow: 'shadow-amber-500/30', text: 'text-white' };
+  if (score >= 60) return { bg: 'from-orange-500 to-red-500', shadow: 'shadow-orange-500/30', text: 'text-white' };
+  if (score >= 40) return { bg: 'from-blue-500 to-purple-500', shadow: 'shadow-blue-500/20', text: 'text-white' };
+  if (score >= 20) return { bg: 'from-slate-500 to-slate-600', shadow: 'shadow-slate-500/10', text: 'text-slate-200' };
+  return { bg: 'from-slate-700 to-slate-800', shadow: '', text: 'text-slate-400' };
+}
+
 function App() {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
@@ -74,6 +90,8 @@ function App() {
   // 展开/折叠状态
   const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
   const [expandedContents, setExpandedContents] = useState<Set<string>>(new Set());
+  const [expandedRelated, setExpandedRelated] = useState<Set<string>>(new Set());
+  const [relatedData, setRelatedData] = useState<Record<string, any[]>>({});
   const [allReasonsExpanded, setAllReasonsExpanded] = useState(false);
 
   // 标签编辑状态
@@ -83,6 +101,7 @@ function App() {
   // 标签云筛选状态
   const [allTags, setAllTags] = useState<{ tag: string; count: number }[]>([]);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [brandPage, setBrandPage] = useState<'about' | 'changelog' | 'feedback' | null>(null);
   const [isBatchTagging, setIsBatchTagging] = useState(false);
 
   // 编辑关键词状态
@@ -364,6 +383,24 @@ function App() {
       return next;
     });
   };
+
+  const toggleRelated = useCallback(async (hotspotId: string) => {
+    setExpandedRelated(prev => {
+      const next = new Set(prev);
+      if (next.has(hotspotId)) {
+        next.delete(hotspotId);
+      } else {
+        next.add(hotspotId);
+        // Fetch related data if not already loaded
+        if (!relatedData[hotspotId]) {
+          hotspotsApi.getRelated(hotspotId).then(data => {
+            setRelatedData(prev => ({ ...prev, [hotspotId]: data }));
+          }).catch(console.error);
+        }
+      }
+      return next;
+    });
+  }, [relatedData]);
 
   // 一键展开/折叠所有相关性理由
   const toggleAllReasons = (list: Hotspot[]) => {
@@ -858,14 +895,25 @@ function App() {
                         {group.items.map((hotspot, index) => {
                           const heatScore = calcHeatScore(hotspot);
                           const heat = getHeatLevel(heatScore);
+                          const featuredScore = calcFeaturedScore(hotspot);
+                          const featured = getFeaturedLevel(featuredScore);
                           return (
                           <motion.div
                             key={hotspot.id}
                             initial={{ opacity: 0, x: -10 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: index * 0.03 }}
-                            className="relative group p-5 rounded-2xl bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 hover:border-white/10 transition-all"
+                            className="relative group p-5 rounded-2xl bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 hover:border-white/10 transition-all overflow-hidden"
                           >
+                            {/* 精选评分角标绶带 */}
+                            <div className="absolute -left-8 top-4 z-10 pointer-events-none">
+                              <div className={cn(
+                                "px-10 py-1 text-[10px] font-bold tracking-wider rotate-[-45deg] bg-gradient-to-r shadow-lg",
+                                featured.bg, featured.shadow, featured.text
+                              )}>
+                                精选 {featuredScore}
+                              </div>
+                            </div>
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           {/* Row 1: Meta badges */}
@@ -920,7 +968,20 @@ function App() {
                               {heat.label} {heatScore}
                             </span>
                           </div>
-                          
+
+                          {/* 预览图 */}
+                          {hotspot.thumbnail && (
+                            <div className="mb-3 rounded-lg overflow-hidden aspect-video bg-white/5">
+                              <img
+                                src={`/api/img-proxy?url=${encodeURIComponent(hotspot.thumbnail)}`}
+                                alt=""
+                                loading="lazy"
+                                className="w-full h-full object-cover"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              />
+                            </div>
+                          )}
+
                           {/* Title */}
                           <h3 className="font-medium text-white mb-2 line-clamp-2 group-hover:text-blue-400 transition-colors">
                             {hotspot.title}
@@ -1119,8 +1180,60 @@ function App() {
                               </AnimatePresence>
                             </div>
                           )}
+
+                          {/* 关联讨论 - 可折叠 */}
+                          {(hotspot.relatedCount ?? 0) > 0 && (
+                            <div className="mt-2">
+                              <button
+                                onClick={() => toggleRelated(hotspot.id)}
+                                className="flex items-center gap-1 text-[11px] text-cyan-400/70 hover:text-cyan-400 transition-colors"
+                              >
+                                {expandedRelated.has(hotspot.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                <MessageCircle className="w-3 h-3" />
+                                关联讨论 {hotspot.relatedCount} 条
+                              </button>
+                              <AnimatePresence>
+                                {expandedRelated.has(hotspot.id) && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="overflow-hidden"
+                                  >
+                                    <div className="mt-2 space-y-1.5 pl-4 border-l-2 border-cyan-500/20">
+                                      {(relatedData[hotspot.id] || []).map((rel: RelatedHotspot) => (
+                                        <a
+                                          key={rel.id}
+                                          href={rel.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="flex items-start gap-2 p-1.5 rounded-md hover:bg-white/5 transition-colors group/rel"
+                                        >
+                                          <span className="flex items-center gap-1 text-[10px] text-slate-600 shrink-0 mt-0.5">
+                                            {getSourceIcon(rel.source)}
+                                            {getSourceLabel(rel.source)}
+                                          </span>
+                                          <span className="text-xs text-slate-400 group-hover/rel:text-white transition-colors line-clamp-1">
+                                            {rel.title}
+                                          </span>
+                                          {rel.authorName && (
+                                            <span className="text-[10px] text-slate-600 shrink-0 mt-0.5">
+                                              {rel.authorName}
+                                            </span>
+                                          )}
+                                        </a>
+                                      ))}
+                                      {(!relatedData[hotspot.id] || relatedData[hotspot.id].length === 0) && expandedRelated.has(hotspot.id) && (
+                                        <span className="text-[11px] text-slate-600">加载中...</span>
+                                      )}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          )}
                         </div>
-                        
+
                         {/* Link */}
                         <a
                           href={hotspot.url}
@@ -1612,7 +1725,21 @@ function App() {
 
         {/* Settings Tab */}
         {activeTab === 'settings' && <Settings />}
+
+        {/* 页脚 */}
+        <footer className="mt-12 py-6 border-t border-white/5">
+          <div className="flex items-center justify-center gap-6 text-xs text-slate-600">
+            <button onClick={() => setBrandPage('about')} className="hover:text-slate-400 transition-colors">关于</button>
+            <button onClick={() => setBrandPage('changelog')} className="hover:text-slate-400 transition-colors">更新日志</button>
+            <button onClick={() => setBrandPage('feedback')} className="hover:text-slate-400 transition-colors">反馈</button>
+            <span className="text-slate-700">·</span>
+            <span>HotPulse v1.0</span>
+          </div>
+        </footer>
       </main>
+
+      {/* 品牌页面遮罩 */}
+      <BrandPages page={brandPage} onClose={() => setBrandPage(null)} />
     </div>
   );
 }
