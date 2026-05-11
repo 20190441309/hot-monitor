@@ -5,6 +5,7 @@ import { searchBing, searchHackerNews, deduplicateResults } from '../services/se
 import { searchSogou, searchBilibili, searchWeibo, detectAndFetchAccount } from '../services/chinaSearch.js';
 import { analyzeContent, expandKeyword, preMatchKeyword } from '../services/ai.js';
 import { sendHotspotEmail } from '../services/email.js';
+import { fetchOgImage } from '../services/ogImage.js';
 import type { SearchResult } from '../types.js';
 
 // 新鲜度过滤：丢弃超过指定小时数的内容
@@ -170,6 +171,9 @@ export async function runHotspotCheck(io: Server): Promise<void> {
             continue;
           }
 
+          // 异步获取 OG 图片（不阻塞主流程）
+          const thumbnail = await fetchOgImage(item.url);
+
           // 保存热点
           const hotspot = await prisma.hotspot.create({
             data: {
@@ -198,6 +202,7 @@ export async function runHotspotCheck(io: Server): Promise<void> {
               authorVerified: item.author?.verified ?? null,
               publishedAt: item.publishedAt || null,
               tags: JSON.stringify(analysis.tags || []),
+              thumbnail: thumbnail || null,
               keywordId: keyword.id
             },
             include: {

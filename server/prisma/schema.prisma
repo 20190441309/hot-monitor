@@ -33,6 +33,8 @@ model Hotspot {
   keywordMentioned Boolean?  // 内容中是否直接提及了关键词
   importance      String    @default("low")
   summary         String?
+  tags            String?   // JSON 数组，如 ["AI Agent","Anthropic"]
+  thumbnail       String?   // OG 图片 / 预览图 URL
   viewCount       Int?
   likeCount       Int?
   retweetCount    Int?
@@ -53,6 +55,15 @@ model Hotspot {
   @@unique([url, source])
 }
 
+model RssFeed {
+  id          String    @id @default(uuid())
+  name        String
+  url         String    @unique
+  isActive    Boolean   @default(true)
+  lastChecked DateTime?
+  createdAt   DateTime  @default(now())
+}
+
 model Notification {
   id        String   @id @default(uuid())
   type      String   // hotspot, alert
@@ -67,4 +78,11 @@ model Setting {
   id    String @id @default(uuid())
   key   String @unique
   value String
+}
+
+model Feedback {
+  id        String   @id @default(uuid())
+  title     String
+  content   String
+  createdAt DateTime @default(now())
 }

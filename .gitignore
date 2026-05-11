@@ -5,3 +5,15 @@ dist/
 *.db-journal
 .DS_Store
 .idea/
+
+# Tool configs
+.claude/
+.firecrawl/
+.playwright-mcp/
+.superpowers/
+
+# Planning docs
+docs/superpowers/
+
+# Screenshots
+*.png
