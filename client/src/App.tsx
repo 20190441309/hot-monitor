@@ -91,7 +91,7 @@ function App() {
   const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
   const [expandedContents, setExpandedContents] = useState<Set<string>>(new Set());
   const [expandedRelated, setExpandedRelated] = useState<Set<string>>(new Set());
-  const [relatedData, setRelatedData] = useState<Record<string, any[]>>({});
+  const [relatedData, setRelatedData] = useState<Record<string, RelatedHotspot[]>>({});
   const [allReasonsExpanded, setAllReasonsExpanded] = useState(false);
 
   // 标签编辑状态
@@ -1223,7 +1223,7 @@ function App() {
                                           )}
                                         </a>
                                       ))}
-                                      {(!relatedData[hotspot.id] || relatedData[hotspot.id].length === 0) && expandedRelated.has(hotspot.id) && (
+                                      {!(hotspot.id in relatedData) && expandedRelated.has(hotspot.id) && (
                                         <span className="text-[11px] text-slate-600">加载中...</span>
                                       )}
                                     </div>
