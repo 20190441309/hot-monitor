@@ -8,7 +8,7 @@ function computeRelated(hotspots: any[]): Map<string, { relatedCount: number; re
   // Group by keywordId
   const byKeyword = new Map<string, any[]>();
   for (const h of hotspots) {
-    const kid = h.keywordId || '__none__';
+    const kid = h.keywordId ?? null;
     if (!byKeyword.has(kid)) byKeyword.set(kid, []);
     byKeyword.get(kid)!.push(h);
   }
@@ -131,7 +131,7 @@ router.get('/', async (req, res) => {
         break;
     }
 
-    const [rawHotspots, total] = await Promise.all([
+    const [rawHotspots, total, allForRelated] = await Promise.all([
       prisma.hotspot.findMany({
         where,
         orderBy,
@@ -142,7 +142,12 @@ router.get('/', async (req, res) => {
           }
         }
       }),
-      prisma.hotspot.count({ where })
+      prisma.hotspot.count({ where }),
+      // Lightweight query for related computation (all matching, no pagination)
+      prisma.hotspot.findMany({
+        where,
+        select: { id: true, keywordId: true, tags: true }
+      })
     ]);
 
     let hotspots;
@@ -154,7 +159,7 @@ router.get('/', async (req, res) => {
     }
 
     // Compute related discussions (tag overlap within same keyword)
-    const relatedMap = computeRelated(rawHotspots);
+    const relatedMap = computeRelated(allForRelated);
     const enriched = hotspots.map(h => {
       const related = relatedMap.get(h.id) || { relatedCount: 0, relatedIds: [] };
       return { ...h, ...related };
@@ -456,7 +461,7 @@ router.get('/:id/related', async (req, res) => {
       return overlap >= 2;
     });
 
-    res.json(related);
+    res.json(related.slice(0, 50));
   } catch (error) {
     console.error('Error fetching related hotspots:', error);
     res.status(500).json({ error: 'Failed to fetch related hotspots' });
