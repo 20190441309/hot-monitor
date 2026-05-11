@@ -24,6 +24,7 @@ export interface Hotspot {
   importance: 'low' | 'medium' | 'high' | 'urgent';
   summary: string | null;
   tags: string | null;
+  thumbnail: string | null;
   viewCount: number | null;
   likeCount: number | null;
   retweetCount: number | null;
@@ -39,6 +40,8 @@ export interface Hotspot {
   publishedAt: string | null;
   createdAt: string;
   keyword: { id: string; text: string; category: string | null } | null;
+  relatedCount: number;
+  relatedIds: string[];
 }
 
 export interface Notification {
@@ -159,8 +162,21 @@ export const hotspotsApi = {
     }),
 
   delete: (id: string) =>
-    request<void>(`/hotspots/${id}`, { method: 'DELETE' })
+    request<void>(`/hotspots/${id}`, { method: 'DELETE' }),
+
+  getRelated: (id: string) =>
+    request<RelatedHotspot[]>(`/hotspots/${id}/related`)
 };
+
+export interface RelatedHotspot {
+  id: string;
+  title: string;
+  summary: string | null;
+  source: string;
+  url: string;
+  authorName: string | null;
+  publishedAt: string | null;
+}
 
 // Notifications API
 export const notificationsApi = {
